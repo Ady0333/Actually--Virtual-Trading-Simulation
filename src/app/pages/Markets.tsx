@@ -1,11 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { TrendingUp, TrendingDown, X, Plus, Minus } from 'lucide-react';
-import TopBar from '../components/TopBar';
 import { useAuth } from '../context/AuthContext';
 
 const USD_TO_INR = 83.5;
 import { API_BASE, WS_BASE } from '../../config';
-const ws = new WebSocket(`${WS_BASE}/ws`);
 
 interface Stock {
   ticker: string;  // CHANGED from symbol
@@ -184,6 +182,7 @@ export default function Markets() {
       const response = await fetch(`${API_BASE}/api/portfolio`, {
         headers: { Authorization: `Bearer ${token}` }
       });
+      if (!response.ok) return;
       const data = await response.json();
       const holdings: Record<string, number> = {};
       data.holdings?.forEach((pos: any) => {
@@ -204,8 +203,7 @@ export default function Markets() {
 
     ws.onmessage = (event) => {
       const data = JSON.parse(event.data);
-      setStocks(data.stocks);
-      applyFilter(data.stocks, filter);
+      if (data.stocks) setStocks(data.stocks);
     };
 
     ws.onclose = () => {
@@ -263,9 +261,7 @@ export default function Markets() {
 
   return (
     <div className="min-h-screen bg-background">
-      <TopBar />
-
-      <main className="container mx-auto px-6 pt-24 pb-8">
+      <main className="container mx-auto px-6 py-8">
         <div className="flex items-center justify-between mb-6">
           <h1 className="text-2xl font-bold text-foreground">All Stocks</h1>
           <div className="flex items-center gap-2">
@@ -371,4 +367,4 @@ export default function Markets() {
       />
     </div>
   );
-}
+}
