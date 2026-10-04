@@ -3,7 +3,10 @@ import { Sidebar } from '../components/Sidebar';
 import TopBar from '../components/TopBar';
 import { useAuth } from '../context/AuthContext';
 import { Loader2 } from 'lucide-react';
-import LandingPage from './LandingPage';
+import { lazy, Suspense } from 'react';
+
+// The landing page pulls in Three.js; only load it for logged-out visitors
+const LandingPage = lazy(() => import('./LandingPage'));
 
 // Inner layout shown when user is logged in
 function AppLayout() {
@@ -24,16 +27,20 @@ function AppLayout() {
 export default function Root() {
   const { user, loading } = useAuth();
 
-  if (loading) {
-    return (
-      <div className="min-h-screen flex items-center justify-center" style={{ backgroundColor: 'var(--bg-root)' }}>
-        <Loader2 className="w-6 h-6 animate-spin" style={{ color: 'var(--accent)' }} />
-      </div>
-    );
-  }
+  const spinner = (
+    <div className="min-h-screen flex items-center justify-center" style={{ backgroundColor: 'var(--bg-root)' }}>
+      <Loader2 className="w-6 h-6 animate-spin" style={{ color: 'var(--accent)' }} />
+    </div>
+  );
+
+  if (loading) return spinner;
 
   if (!user) {
-    return <LandingPage />;
+    return (
+      <Suspense fallback={spinner}>
+        <LandingPage />
+      </Suspense>
+    );
   }
 
   return <AppLayout />;

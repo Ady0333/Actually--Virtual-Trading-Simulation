@@ -162,9 +162,9 @@ export default function Profile() {
   }, []);
 
   const statCards = [
-    { label: 'Total Holdings', value: statsLoading ? '…' : String(stats.total_trades) },
-    { label: 'Profitable', value: statsLoading ? '…' : String(stats.successful_trades) },
-    { label: 'Active Days', value: statsLoading ? '…' : String(stats.trading_days) },
+    { label: 'Total Trades', value: statsLoading ? '…' : String(stats.total_trades) },
+    { label: 'Profitable Sells', value: statsLoading ? '…' : String(stats.successful_trades) },
+    { label: 'Trading Days', value: statsLoading ? '…' : String(stats.trading_days) },
     { label: 'Win Rate', value: statsLoading ? '…' : `${stats.win_rate}%` },
   ];
 

@@ -1,34 +1,31 @@
 import { createBrowserRouter } from 'react-router';
+import type { ComponentType } from 'react';
 import Root from './pages/Root';
-import Dashboard from './pages/Dashboard';
-import Portfolio from './pages/Portfolio';
-import Profile from './pages/Profile';
-import Transactions from './pages/Transactions';
-import News from './pages/News';
-import Markets from './pages/Markets';
-import Settings from './pages/Settings';
-import Leaderboard from './pages/Leaderboard';
-import Login from './pages/Login';
+
+// Pages are code-split so the initial bundle only carries what's on screen.
+const page = (load: () => Promise<{ default: ComponentType }>) => async () => ({
+  Component: (await load()).default,
+});
 
 export const router = createBrowserRouter([
   // Public routes
   {
     path: '/login',
-    Component: Login,
+    lazy: page(() => import('./pages/Login')),
   },
-  // Protected routes (Root checks auth and redirects to /login if not logged in)
+  // Protected routes (Root shows the landing page when not logged in)
   {
     path: '/',
     Component: Root,
     children: [
-      { index: true, Component: Dashboard },
-      { path: 'portfolio', Component: Portfolio },
-      { path: 'markets', Component: Markets },
-      { path: 'news', Component: News },
-      { path: 'profile', Component: Profile },
-      { path: 'transactions', Component: Transactions },
-      { path: 'settings', Component: Settings },
-      { path: 'leaderboard', Component: Leaderboard },
+      { index: true, lazy: page(() => import('./pages/Dashboard')) },
+      { path: 'portfolio', lazy: page(() => import('./pages/Portfolio')) },
+      { path: 'markets', lazy: page(() => import('./pages/Markets')) },
+      { path: 'news', lazy: page(() => import('./pages/News')) },
+      { path: 'profile', lazy: page(() => import('./pages/Profile')) },
+      { path: 'transactions', lazy: page(() => import('./pages/Transactions')) },
+      { path: 'settings', lazy: page(() => import('./pages/Settings')) },
+      { path: 'leaderboard', lazy: page(() => import('./pages/Leaderboard')) },
     ],
   },
 ]);

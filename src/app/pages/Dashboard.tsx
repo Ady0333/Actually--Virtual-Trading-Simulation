@@ -1,79 +1,55 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { TrendingUp, TrendingDown, DollarSign, Wallet, PieChart, Activity } from 'lucide-react';
 import { useNavigate } from 'react-router';
-import { useAuth } from '../context/AuthContext';
+import { API_BASE } from '../../config';
+import { useMarketFeed } from '../hooks/useMarketFeed';
+import { inr, timeAgo, authHeaders } from '../lib/format';
 
-const USD_TO_INR = 83.5;
-import { API_BASE, WS_BASE } from '../../config';
+interface PortfolioSummary {
+  cash: number;
+  total_value: number;
+  total_pnl: number;
+  total_pnl_pct: number;
+}
 
-interface NewsItem {
-  headline: string;
-  ticker?: string;
-  sector?: string;
+interface Trade {
+  id: number;
+  type: 'buy' | 'sell';
+  ticker: string;
+  shares: number;
+  total: number;
   timestamp: string;
-  bias: 'bullish' | 'bearish';
 }
 
 export default function Dashboard() {
-  const { user } = useAuth();
   const navigate = useNavigate();
-  const [news, setNews] = useState<NewsItem[]>([]);
-  const [stats, setStats] = useState({
-    netWorth: 51957.46,
-    cashBalance: 45678.32,
-    portfolioValue: 6279.14,
-    todayPnL: 58.14
-  });
+  const { news } = useMarketFeed();
+  const [portfolio, setPortfolio] = useState<PortfolioSummary | null>(null);
+  const [recentActivity, setRecentActivity] = useState<Trade[] | null>(null);
 
-  // WebSocket for live news
   useEffect(() => {
-    const ws = new WebSocket(`${WS_BASE}/ws`);
-
-    ws.onmessage = (event) => {
-      const data = JSON.parse(event.data);
-      if (data.news) {
-        setNews(data.news);
-      }
-    };
-
-    return () => ws.close();
-  }, []);
-
-  // Fetch portfolio stats
-  useEffect(() => {
-    const fetchStats = async () => {
+    const load = async () => {
       try {
-        const token = localStorage.getItem('token');
-        const response = await fetch(`${API_BASE}/api/portfolio`, {
-          headers: { Authorization: `Bearer ${token}` }
-        });
-        if (!response.ok) return;
-        const data = await response.json();
-
-        const cashINR = data.cash * USD_TO_INR;
-        const portfolioValueINR = (data.total_value - data.cash) * USD_TO_INR;
-        const netWorthINR = data.total_value * USD_TO_INR;
-
-        setStats({
-          netWorth: netWorthINR,
-          cashBalance: cashINR,
-          portfolioValue: portfolioValueINR,
-          todayPnL: 58.14 // Mock for now
-        });
+        const [pRes, tRes] = await Promise.all([
+          fetch(`${API_BASE}/api/portfolio`, { headers: authHeaders() }),
+          fetch(`${API_BASE}/api/transactions?limit=6`, { headers: authHeaders() }),
+        ]);
+        if (pRes.ok) setPortfolio(await pRes.json());
+        setRecentActivity(tRes.ok ? await tRes.json() : []);
       } catch {
-        // stats fetch failed silently
+        setRecentActivity([]);
       }
     };
-
-    fetchStats();
+    load();
+    // Holdings are re-priced every tick; refresh the summary periodically
+    const id = setInterval(load, 10000);
+    return () => clearInterval(id);
   }, []);
 
-  const recentActivity = [
-    { type: 'BUY', symbol: 'AAPL', shares: 10, price: 14900.57, time: '4h ago' },
-    { type: 'SELL', symbol: 'GOOGL', shares: 5, price: 11716.72, time: '5h ago' },
-    { type: 'BUY', symbol: 'MSFT', shares: 8, price: 34669.2, time: '1d ago' },
-    { type: 'BUY', symbol: 'NVDA', shares: 3, price: 73342.23, time: '2d ago' },
-  ];
+  const pnl = portfolio?.total_pnl ?? 0;
+  const pnlPct = portfolio?.total_pnl_pct ?? 0;
+  const isUp = pnl >= 0;
+  const fmt = (v: number | undefined) => (portfolio ? inr(v ?? 0) : '…');
 
   return (
     <div className="min-h-screen bg-background">
@@ -86,8 +62,12 @@ export default function Dashboard() {
                 <p className="text-sm text-muted-foreground">Net Worth</p>
                 <DollarSign className="w-5 h-5 text-primary" />
               </div>
-              <p className="text-3xl font-bold text-foreground">₹{stats.netWorth.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</p>
-              <p className="text-xs text-green-500 mt-1">+0.93%</p>
+              <p className="text-3xl font-bold text-foreground">{fmt(portfolio?.total_value)}</p>
+              {portfolio && (
+                <p className={`text-xs mt-1 ${isUp ? 'text-green-500' : 'text-red-500'}`}>
+                  {isUp ? '+' : ''}{pnlPct.toFixed(2)}% all time
+                </p>
+              )}
             </div>
 
             <div className="bg-card rounded-lg p-6 border border-border">
@@ -95,7 +75,7 @@ export default function Dashboard() {
                 <p className="text-sm text-muted-foreground">Cash Balance</p>
                 <Wallet className="w-5 h-5 text-primary" />
               </div>
-              <p className="text-3xl font-bold text-foreground">₹{stats.cashBalance.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</p>
+              <p className="text-3xl font-bold text-foreground">{fmt(portfolio?.cash)}</p>
             </div>
 
             <div className="bg-card rounded-lg p-6 border border-border">
@@ -103,16 +83,24 @@ export default function Dashboard() {
                 <p className="text-sm text-muted-foreground">Portfolio Value</p>
                 <PieChart className="w-5 h-5 text-primary" />
               </div>
-              <p className="text-3xl font-bold text-foreground">₹{stats.portfolioValue.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</p>
+              <p className="text-3xl font-bold text-foreground">
+                {fmt(portfolio ? portfolio.total_value - portfolio.cash : 0)}
+              </p>
             </div>
 
             <div className="bg-card rounded-lg p-6 border border-border">
               <div className="flex items-center justify-between mb-2">
-                <p className="text-sm text-muted-foreground">Today P/L</p>
-                <TrendingUp className="w-5 h-5 text-green-500" />
+                <p className="text-sm text-muted-foreground">Total P/L</p>
+                {isUp ? <TrendingUp className="w-5 h-5 text-green-500" /> : <TrendingDown className="w-5 h-5 text-red-500" />}
               </div>
-              <p className="text-3xl font-bold text-green-500">+₹{stats.todayPnL.toFixed(2)}</p>
-              <p className="text-xs text-green-500 mt-1">+0.93%</p>
+              <p className={`text-3xl font-bold ${isUp ? 'text-green-500' : 'text-red-500'}`}>
+                {portfolio ? `${isUp ? '+' : '-'}${inr(Math.abs(pnl))}` : '…'}
+              </p>
+              {portfolio && (
+                <p className={`text-xs mt-1 ${isUp ? 'text-green-500' : 'text-red-500'}`}>
+                  {isUp ? '+' : ''}{pnlPct.toFixed(2)}%
+                </p>
+              )}
             </div>
           </div>
 
@@ -131,37 +119,44 @@ export default function Dashboard() {
               </div>
 
               <div className="divide-y divide-border">
-                {recentActivity.map((activity, i) => (
-                  <div key={i} className="p-4 hover:bg-accent/30 transition">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-3">
-                        <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${
-                          activity.type === 'BUY' ? 'bg-green-500/10' : 'bg-red-500/10'
-                        }`}>
-                          {activity.type === 'BUY' ? (
-                            <TrendingUp className="w-5 h-5 text-green-500" />
-                          ) : (
-                            <TrendingDown className="w-5 h-5 text-red-500" />
-                          )}
+                {recentActivity === null ? (
+                  <div className="p-6 text-center text-muted-foreground text-sm">Loading…</div>
+                ) : recentActivity.length === 0 ? (
+                  <div className="p-6 text-center text-muted-foreground text-sm">
+                    No trades yet.{' '}
+                    <button onClick={() => navigate('/markets')} className="text-primary hover:underline">Make your first trade →</button>
+                  </div>
+                ) : (
+                  recentActivity.map((activity) => (
+                    <div key={activity.id} className="p-4 hover:bg-accent/30 transition">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-3">
+                          <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${
+                            activity.type === 'buy' ? 'bg-green-500/10' : 'bg-red-500/10'
+                          }`}>
+                            {activity.type === 'buy' ? (
+                              <TrendingUp className="w-5 h-5 text-green-500" />
+                            ) : (
+                              <TrendingDown className="w-5 h-5 text-red-500" />
+                            )}
+                          </div>
+                          <div>
+                            <p className="font-semibold text-foreground">
+                              {activity.type.toUpperCase()} {activity.ticker}
+                            </p>
+                            <p className="text-xs text-foreground/60">
+                              x{activity.shares} shares
+                            </p>
+                          </div>
                         </div>
-                        <div>
-                          <p className="font-semibold text-foreground">
-                            {activity.type} {activity.symbol}
-                          </p>
-                          <p className="text-xs text-foreground/60">
-                            x{activity.shares} shares
-                          </p>
+                        <div className="text-right">
+                          <p className="font-semibold text-foreground">{inr(activity.total)}</p>
+                          <p className="text-xs text-foreground/60">{timeAgo(activity.timestamp)}</p>
                         </div>
-                      </div>
-                      <div className="text-right">
-                        <p className="font-semibold text-foreground">
-                          ₹{activity.price.toLocaleString('en-IN')}
-                        </p>
-                        <p className="text-xs text-foreground/60">{activity.time}</p>
                       </div>
                     </div>
-                  </div>
-                ))}
+                  ))
+                )}
               </div>
             </div>
 
@@ -176,12 +171,12 @@ export default function Dashboard() {
 
               <div className="divide-y divide-border max-h-[600px] overflow-y-auto">
                 {news.length > 0 ? (
-                  news.map((item, i) => (
-                    <div key={i} className="p-4 hover:bg-accent/30 transition">
+                  news.slice(0, 10).map((item) => (
+                    <div key={item.timestamp + item.headline} className="p-4 hover:bg-accent/30 transition">
                       <div className="flex items-start gap-2 mb-2">
                         <span className={`px-2 py-0.5 rounded text-xs font-medium ${
-                          item.bias === 'bullish' 
-                            ? 'bg-green-500/10 text-green-500' 
+                          item.bias === 'bullish'
+                            ? 'bg-green-500/10 text-green-500'
                             : 'bg-red-500/10 text-red-500'
                         }`}>
                           {item.bias === 'bullish' ? '📈' : '📉'}

@@ -1,89 +1,38 @@
+import { useEffect, useState } from 'react';
 import { ArrowUpRight, ArrowDownLeft, Calendar } from 'lucide-react';
+import { API_BASE } from '../../config';
+import { inr, authHeaders } from '../lib/format';
 
 interface Transaction {
-  id: string;
+  id: number;
   type: 'buy' | 'sell';
-  symbol: string;
+  ticker: string;
   name: string;
   shares: number;
   price: number;
   total: number;
-  date: string;
-  time: string;
+  realized_pnl: number | null;
+  timestamp: string;
 }
 
-const mockTransactions: Transaction[] = [
-  {
-    id: '1',
-    type: 'buy',
-    symbol: 'AAPL',
-    name: 'Apple Inc.',
-    shares: 5,
-    price: 175.20,
-    total: 876.00,
-    date: 'Feb 15, 2026',
-    time: '10:30 AM',
-  },
-  {
-    id: '2',
-    type: 'buy',
-    symbol: 'MSFT',
-    name: 'Microsoft Corp.',
-    shares: 3,
-    price: 405.50,
-    total: 1216.50,
-    date: 'Feb 14, 2026',
-    time: '2:15 PM',
-  },
-  {
-    id: '3',
-    type: 'sell',
-    symbol: 'GOOGL',
-    name: 'Alphabet Inc.',
-    shares: 2,
-    price: 142.68,
-    total: 285.36,
-    date: 'Feb 13, 2026',
-    time: '11:45 AM',
-  },
-  {
-    id: '4',
-    type: 'buy',
-    symbol: 'TSLA',
-    name: 'Tesla Inc.',
-    shares: 5,
-    price: 245.00,
-    total: 1225.00,
-    date: 'Feb 12, 2026',
-    time: '9:20 AM',
-  },
-  {
-    id: '5',
-    type: 'buy',
-    symbol: 'AAPL',
-    name: 'Apple Inc.',
-    shares: 5,
-    price: 178.30,
-    total: 891.50,
-    date: 'Feb 11, 2026',
-    time: '3:50 PM',
-  },
-  {
-    id: '6',
-    type: 'buy',
-    symbol: 'MSFT',
-    name: 'Microsoft Corp.',
-    shares: 5,
-    price: 410.00,
-    total: 2050.00,
-    date: 'Feb 10, 2026',
-    time: '1:10 PM',
-  },
-];
-
 export default function Transactions() {
-  const buyCount = mockTransactions.filter((t) => t.type === 'buy').length;
-  const sellCount = mockTransactions.filter((t) => t.type === 'sell').length;
+  const [transactions, setTransactions] = useState<Transaction[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    fetch(`${API_BASE}/api/transactions?limit=500`, { headers: authHeaders() })
+      .then(res => {
+        if (!res.ok) throw new Error('Failed to load transactions');
+        return res.json();
+      })
+      .then(setTransactions)
+      .catch(e => setError(e.message))
+      .finally(() => setLoading(false));
+  }, []);
+
+  const buyCount = transactions.filter((t) => t.type === 'buy').length;
+  const sellCount = transactions.filter((t) => t.type === 'sell').length;
 
   return (
     <div className="p-6 h-full overflow-y-auto">
@@ -138,7 +87,7 @@ export default function Transactions() {
               color: 'var(--text-primary)'
             }}
           >
-            {mockTransactions.length}
+            {transactions.length}
           </p>
         </div>
 
@@ -295,9 +244,18 @@ export default function Transactions() {
               </tr>
             </thead>
             <tbody>
-              {mockTransactions.map((transaction, index) => {
+              {loading && (
+                <tr><td colSpan={7} className="px-4 py-8 text-center text-xs" style={{ color: 'var(--text-muted)' }}>Loading…</td></tr>
+              )}
+              {!loading && (error || transactions.length === 0) && (
+                <tr><td colSpan={7} className="px-4 py-8 text-center text-xs" style={{ color: error ? 'var(--red)' : 'var(--text-muted)' }}>
+                  {error || 'No transactions yet — trades you make on the Markets page will show up here.'}
+                </td></tr>
+              )}
+              {transactions.map((transaction, index) => {
                 const isBuy = transaction.type === 'buy';
-                const isLastRow = index === mockTransactions.length - 1;
+                const isLastRow = index === transactions.length - 1;
+                const when = new Date(transaction.timestamp);
 
                 return (
                   <tr 
@@ -345,7 +303,7 @@ export default function Transactions() {
                           color: 'var(--text-primary)'
                         }}
                       >
-                        {transaction.symbol}
+                        {transaction.ticker}
                       </span>
                     </td>
                     <td className="px-4 py-3">
@@ -378,7 +336,7 @@ export default function Transactions() {
                           color: 'var(--text-primary)'
                         }}
                       >
-                        ${transaction.price.toFixed(2)}
+                        {inr(transaction.price)}
                       </span>
                     </td>
                     <td className="px-4 py-3 text-right">
@@ -389,7 +347,7 @@ export default function Transactions() {
                           color: 'var(--text-primary)'
                         }}
                       >
-                        ${transaction.total.toFixed(2)}
+                        {inr(transaction.total)}
                       </span>
                     </td>
                     <td className="px-4 py-3">
@@ -401,7 +359,7 @@ export default function Transactions() {
                             color: 'var(--text-primary)'
                           }}
                         >
-                          {transaction.date}
+                          {when.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
                         </p>
                         <p 
                           className="text-[10px]"
@@ -410,7 +368,7 @@ export default function Transactions() {
                             color: 'var(--text-muted)'
                           }}
                         >
-                          {transaction.time}
+                          {when.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}
                         </p>
                       </div>
                     </td>

@@ -12,6 +12,7 @@ import {
 } from 'lucide-react';
 import { Link, useLocation } from 'react-router';
 import { useAuth } from '../context/AuthContext';
+import { inr } from '../lib/format';
 
 export function Sidebar() {
   const location = useLocation();
@@ -180,29 +181,13 @@ export function Sidebar() {
               >
                 {user?.username || 'User'}
               </span>
-              <span 
-                className="text-[10px] font-medium tabular-nums"
-                style={{ 
-                  fontFamily: 'var(--font-mono)',
-                  color: 'var(--accent)'
-                }}
-              >
-                Lv.5
-              </span>
             </div>
-            {/* XP Progress bar */}
-            <div 
-              className="h-1 rounded-full mt-1 overflow-hidden"
-              style={{ backgroundColor: 'var(--bg-elevated)' }}
+            <p
+              className="text-[10px] tabular-nums truncate"
+              style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-muted)' }}
             >
-              <div 
-                className="h-full rounded-full"
-                style={{ 
-                  backgroundColor: 'var(--accent)',
-                  width: '68%'
-                }}
-              />
-            </div>
+              {inr(user?.cash ?? 0)} cash
+            </p>
           </div>
         </div>
 

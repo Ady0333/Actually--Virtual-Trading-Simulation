@@ -1,27 +1,30 @@
 """
 Actually — Stock Market Simulator Backend
-FastAPI + SQLite | Market Engine + News Bias + JWT Auth + WebSocket
+FastAPI + SQLite/Postgres | Market Engine + News Bias + JWT Auth + WebSocket
 """
 
-import os, json, time, random, hashlib, sqlite3, asyncio, threading
-from datetime import datetime, timedelta
+import os, time, random, sqlite3, asyncio
+from datetime import datetime, timedelta, timezone
 from contextlib import asynccontextmanager
 from urllib.parse import quote
 
 import httpx
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Depends, status
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Depends, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
 from jose import jwt, JWTError
 from passlib.context import CryptContext
-from fastapi import Form
 
 # ──────────────────────────── CONFIG ────────────────────────────
 SECRET_KEY = os.getenv("SECRET_KEY", "actually-secret-key-change-in-prod-2026")
 ALGORITHM = "HS256"
 TOKEN_EXPIRE_HOURS = 24
-DB_PATH = os.path.join(os.path.dirname(__file__), "actually.db")
+# Set DATABASE_URL (postgres://...) in production so data survives restarts.
+# Without it, a local SQLite file is used (DB_PATH, defaults next to this file).
+DATABASE_URL = os.getenv("DATABASE_URL", "")
+USE_PG = DATABASE_URL.startswith(("postgres://", "postgresql://"))
+DB_PATH = os.getenv("DB_PATH", os.path.join(os.path.dirname(__file__), "actually.db"))
 INITIAL_CASH = 1197.60
 TICK_INTERVAL = 2        # seconds between price updates
 NEWS_INTERVAL = 45       # seconds between news headlines
@@ -29,59 +32,107 @@ NEWS_BIAS_DURATION = 180  # seconds a news bias lasts (3 minutes)
 PRICE_WALK_PCT = 0.0015  # ±0.15% random walk
 NEWS_BIAS_PCT = 0.02     # ±2% bias from news
 
+def utcnow_iso() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
 # ──────────────────────────── DATABASE ──────────────────────────
-def get_db():
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
-    return conn
+class DB:
+    """Thin wrapper so the same `?`-style SQL runs on SQLite and Postgres."""
+
+    def __init__(self):
+        if USE_PG:
+            import psycopg
+            from psycopg.rows import dict_row
+            self.conn = psycopg.connect(DATABASE_URL, row_factory=dict_row)
+        else:
+            self.conn = sqlite3.connect(DB_PATH, timeout=10)
+            self.conn.row_factory = sqlite3.Row
+            self.conn.execute("PRAGMA journal_mode=WAL")
+
+    def execute(self, sql: str, params: tuple = ()):
+        if USE_PG:
+            sql = sql.replace("?", "%s")
+        return self.conn.execute(sql, params)
+
+    def commit(self):
+        self.conn.commit()
+
+    def rollback(self):
+        self.conn.rollback()
+
+    def close(self):
+        self.conn.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, *_):
+        if exc_type:
+            self.rollback()
+        self.close()
+
+def get_db() -> DB:
+    return DB()
 
 def init_db():
-    conn = get_db()
-    # Migrate: add display_name if it doesn't exist on older DBs
-    try:
-        conn.execute("ALTER TABLE users ADD COLUMN display_name TEXT")
-        conn.commit()
-    except Exception:
-        pass
-    conn.executescript("""
-        CREATE TABLE IF NOT EXISTS users (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            username TEXT UNIQUE NOT NULL,
-            password_hash TEXT NOT NULL,
-            cash REAL DEFAULT 50000.0,
-            display_name TEXT
-        );
-        CREATE TABLE IF NOT EXISTS positions (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER NOT NULL,
-            ticker TEXT NOT NULL,
-            shares REAL NOT NULL DEFAULT 0,
-            avg_price REAL NOT NULL DEFAULT 0,
-            FOREIGN KEY (user_id) REFERENCES users(id),
-            UNIQUE(user_id, ticker)
-        );
-    """)
-    conn.commit()
-    conn.close()
+    pk = "SERIAL PRIMARY KEY" if USE_PG else "INTEGER PRIMARY KEY AUTOINCREMENT"
+    real = "DOUBLE PRECISION" if USE_PG else "REAL"
+    with get_db() as db:
+        for stmt in (
+            f"""CREATE TABLE IF NOT EXISTS users (
+                id {pk},
+                username TEXT UNIQUE NOT NULL,
+                password_hash TEXT NOT NULL,
+                cash {real} DEFAULT {INITIAL_CASH},
+                display_name TEXT
+            )""",
+            f"""CREATE TABLE IF NOT EXISTS positions (
+                id {pk},
+                user_id INTEGER NOT NULL REFERENCES users(id),
+                ticker TEXT NOT NULL,
+                shares {real} NOT NULL DEFAULT 0,
+                avg_price {real} NOT NULL DEFAULT 0,
+                UNIQUE(user_id, ticker)
+            )""",
+            f"""CREATE TABLE IF NOT EXISTS trades (
+                id {pk},
+                user_id INTEGER NOT NULL REFERENCES users(id),
+                ticker TEXT NOT NULL,
+                side TEXT NOT NULL,
+                shares {real} NOT NULL,
+                price {real} NOT NULL,
+                total {real} NOT NULL,
+                realized_pnl {real},
+                created_at TEXT NOT NULL
+            )""",
+            "CREATE INDEX IF NOT EXISTS idx_trades_user ON trades(user_id, id)",
+        ):
+            db.execute(stmt)
+        db.commit()
+        # Migrate older DBs that predate display_name
+        if USE_PG:
+            db.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS display_name TEXT")
+            db.commit()
+        else:
+            cols = [r["name"] for r in db.execute("PRAGMA table_info(users)").fetchall()]
+            if "display_name" not in cols:
+                db.execute("ALTER TABLE users ADD COLUMN display_name TEXT")
+                db.commit()
 
 # ──────────────────────────── AUTH UTILS ─────────────────────────
 pwd_ctx = CryptContext(schemes=["bcrypt"], deprecated="auto")
 security = HTTPBearer()
 
 def create_token(user_id: int, username: str) -> str:
-    expire = datetime.utcnow() + timedelta(hours=TOKEN_EXPIRE_HOURS)
+    expire = datetime.now(timezone.utc) + timedelta(hours=TOKEN_EXPIRE_HOURS)
     return jwt.encode({"sub": str(user_id), "username": username, "exp": expire}, SECRET_KEY, algorithm=ALGORITHM)
 
 def verify_token(creds: HTTPAuthorizationCredentials = Depends(security)):
     try:
         payload = jwt.decode(creds.credentials, SECRET_KEY, algorithms=[ALGORITHM])
-        user_id = int(payload.get("sub"))
-        username = payload.get("username")
-        if user_id is None:
-            raise HTTPException(status_code=401, detail="Invalid token")
-        return {"user_id": user_id, "username": username}
-    except JWTError:
+        user_id = int(payload["sub"])
+        return {"user_id": user_id, "username": payload.get("username")}
+    except (JWTError, KeyError, TypeError, ValueError):
         raise HTTPException(status_code=401, detail="Invalid token")
 
 # ──────────────────────────── STOCK DATA ─────────────────────────
@@ -199,7 +250,8 @@ class MarketEngine:
         self.day_open = {}
         self.active_biases = []   # list of {ticker, sector, bias, expires_at}
         self.news_feed = []       # list of {headline, timestamp}
-        self.last_news_time = time.time()
+        # Backdate so the first headline appears on the first tick, not 45s later
+        self.last_news_time = time.time() - NEWS_INTERVAL
         self._init_stocks()
 
     def _init_stocks(self):
@@ -252,7 +304,7 @@ class MarketEngine:
             "headline": template["headline"],
             "ticker": template.get("ticker"),
             "sector": template.get("sector"),
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": utcnow_iso(),
             "bias": "bullish" if template["bias"] > 0 else "bearish",
         }
 
@@ -270,8 +322,7 @@ class MarketEngine:
 
         return news_item
 
-    def get_state(self):
-        """Return current market state for WebSocket broadcast."""
+    def get_stocks(self):
         stocks = []
         for ticker, s in self.stocks.items():
             day_open = self.day_open[ticker]
@@ -283,7 +334,11 @@ class MarketEngine:
                 "price": s["price"],
                 "change_pct": round(change_pct, 2),
             })
-        return {"stocks": stocks, "news": self.news_feed[:10]}
+        return stocks
+
+    def get_state(self):
+        """Return current market state for WebSocket broadcast."""
+        return {"stocks": self.get_stocks(), "news": self.news_feed[:20]}
 
     def get_price(self, ticker: str) -> float:
         s = self.stocks.get(ticker)
@@ -309,7 +364,7 @@ class ConnectionManager:
 
     async def broadcast(self, data: dict):
         dead = []
-        for ws in self.active:
+        for ws in list(self.active):
             try:
                 await ws.send_json(data)
             except Exception:
@@ -324,10 +379,12 @@ manager = ConnectionManager()
 async def market_loop():
     """Background task: tick the engine and broadcast every 2 seconds."""
     while True:
-        engine.tick()
-        engine.maybe_generate_news()
-        state = engine.get_state()
-        await manager.broadcast(state)
+        try:
+            engine.tick()
+            engine.maybe_generate_news()
+            await manager.broadcast(engine.get_state())
+        except Exception as e:
+            print(f"market loop error: {e}")
         await asyncio.sleep(TICK_INTERVAL)
 
 # ──────────────────────────── FASTAPI APP ────────────────────────
@@ -335,6 +392,7 @@ async def market_loop():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
+    print(f"Database: {'Postgres' if USE_PG else 'SQLite at ' + DB_PATH}")
     task = asyncio.create_task(market_loop())
     yield
     task.cancel()
@@ -344,7 +402,6 @@ app = FastAPI(title="Actually — Stock Simulator", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -363,32 +420,39 @@ class ChangePasswordRequest(BaseModel):
     current_password: str
     new_password: str
 
+class UpdateProfileRequest(BaseModel):
+    display_name: str
+
+# ──────────────────────────── HEALTH ─────────────────────────────
+
+@app.get("/")
+def health():
+    return {"status": "ok", "database": "postgres" if USE_PG else "sqlite"}
+
 # ──────────────────────────── AUTH ROUTES ─────────────────────────
 
 @app.post("/api/register")
 def register(req: AuthRequest):
-    if len(req.username) < 3 or len(req.password) < 4:
+    username = req.username.strip()
+    if len(username) < 3 or len(req.password) < 4:
         raise HTTPException(400, "Username must be 3+ chars, password 4+ chars")
-    conn = get_db()
-    try:
+    with get_db() as db:
+        if db.execute("SELECT 1 FROM users WHERE username = ?", (username,)).fetchone():
+            raise HTTPException(400, "Username already exists")
         hashed = pwd_ctx.hash(req.password)
-        cur = conn.execute("INSERT INTO users (username, password_hash, cash) VALUES (?, ?, ?)",
-                           (req.username, hashed, INITIAL_CASH))
-        conn.commit()
-        user_id = cur.lastrowid
-        token = create_token(user_id, req.username)
-        return {"token": token, "username": req.username, "cash": INITIAL_CASH}
-    except sqlite3.IntegrityError:
-        raise HTTPException(400, "Username already exists")
-    finally:
-        conn.close()
+        row = db.execute(
+            "INSERT INTO users (username, password_hash, cash) VALUES (?, ?, ?) RETURNING id",
+            (username, hashed, INITIAL_CASH),
+        ).fetchone()
+        db.commit()
+    token = create_token(row["id"], username)
+    return {"token": token, "username": username, "cash": INITIAL_CASH}
 
 
 @app.post("/api/login")
 def login(username: str = Form(), password: str = Form()):
-    conn = get_db()
-    row = conn.execute("SELECT * FROM users WHERE username = ?", (username,)).fetchone()
-    conn.close()
+    with get_db() as db:
+        row = db.execute("SELECT * FROM users WHERE username = ?", (username.strip(),)).fetchone()
     if not row or not pwd_ctx.verify(password, row["password_hash"]):
         raise HTTPException(401, "Invalid credentials")
     token = create_token(row["id"], row["username"])
@@ -396,23 +460,33 @@ def login(username: str = Form(), password: str = Form()):
 
 @app.get("/api/me")
 def get_me(user=Depends(verify_token)):
-    conn = get_db()
-    row = conn.execute("SELECT cash, display_name FROM users WHERE id = ?", (user["user_id"],)).fetchone()
-    conn.close()
+    with get_db() as db:
+        row = db.execute("SELECT cash, display_name FROM users WHERE id = ?", (user["user_id"],)).fetchone()
     if not row:
         raise HTTPException(404, "User not found")
     display = row["display_name"] if row["display_name"] else user["username"]
     return {"username": display, "cash": row["cash"]}
 
+# ──────────────────────────── MARKET ROUTES ──────────────────────
+
+@app.get("/api/stocks")
+def list_stocks():
+    return engine.get_stocks()
+
+@app.get("/api/news")
+def list_news():
+    return engine.news_feed
+
 # ──────────────────────────── PORTFOLIO ROUTES ───────────────────
 
 @app.get("/api/portfolio")
 def get_portfolio(user=Depends(verify_token)):
-    conn = get_db()
-    cash_row = conn.execute("SELECT cash FROM users WHERE id = ?", (user["user_id"],)).fetchone()
-    positions = conn.execute("SELECT ticker, shares, avg_price FROM positions WHERE user_id = ? AND shares > 0",
-                             (user["user_id"],)).fetchall()
-    conn.close()
+    with get_db() as db:
+        cash_row = db.execute("SELECT cash FROM users WHERE id = ?", (user["user_id"],)).fetchone()
+        positions = db.execute("SELECT ticker, shares, avg_price FROM positions WHERE user_id = ? AND shares > 0",
+                               (user["user_id"],)).fetchall()
+    if not cash_row:
+        raise HTTPException(404, "User not found")
 
     holdings = []
     total_value = cash_row["cash"]
@@ -430,74 +504,142 @@ def get_portfolio(user=Depends(verify_token)):
             "pnl": round(pnl, 2),
         })
 
-    return {"cash": round(cash_row["cash"], 2), "total_value": round(total_value, 2), "holdings": holdings}
+    total_pnl = total_value - INITIAL_CASH
+    return {
+        "cash": round(cash_row["cash"], 2),
+        "total_value": round(total_value, 2),
+        "total_pnl": round(total_pnl, 2),
+        "total_pnl_pct": round(total_pnl / INITIAL_CASH * 100, 2),
+        "holdings": holdings,
+    }
 
 # ──────────────────────────── TRADE ROUTES ───────────────────────
 
-@app.post("/api/buy")
-def buy_stock(req: TradeRequest, user=Depends(verify_token)):
+def _validate_trade(req: TradeRequest):
     if req.shares <= 0:
         raise HTTPException(400, "Shares must be positive")
-    price = engine.get_price(req.ticker)
+    ticker = req.ticker.strip().upper()
+    price = engine.get_price(ticker)
     if price <= 0:
         raise HTTPException(400, "Invalid ticker")
+    return ticker, price
+
+@app.post("/api/buy")
+def buy_stock(req: TradeRequest, user=Depends(verify_token)):
+    ticker, price = _validate_trade(req)
     cost = price * req.shares
+    uid = user["user_id"]
 
-    conn = get_db()
-    cash_row = conn.execute("SELECT cash FROM users WHERE id = ?", (user["user_id"],)).fetchone()
-    if cash_row["cash"] < cost:
-        conn.close()
-        raise HTTPException(400, f"Insufficient funds. Need ${cost:.2f}, have ${cash_row['cash']:.2f}")
+    with get_db() as db:
+        # Conditional update makes the balance check and debit atomic
+        cur = db.execute("UPDATE users SET cash = cash - ? WHERE id = ? AND cash >= ?", (cost, uid, cost))
+        if cur.rowcount == 0:
+            row = db.execute("SELECT cash FROM users WHERE id = ?", (uid,)).fetchone()
+            have = row["cash"] if row else 0
+            raise HTTPException(400, f"Insufficient funds. Need ${cost:.2f}, have ${have:.2f}")
 
-    # Update cash
-    conn.execute("UPDATE users SET cash = cash - ? WHERE id = ?", (cost, user["user_id"]))
-
-    # Update or insert position
-    existing = conn.execute("SELECT shares, avg_price FROM positions WHERE user_id = ? AND ticker = ?",
-                            (user["user_id"], req.ticker)).fetchone()
-    if existing and existing["shares"] > 0:
-        total_shares = existing["shares"] + req.shares
-        new_avg = ((existing["avg_price"] * existing["shares"]) + (price * req.shares)) / total_shares
-        conn.execute("UPDATE positions SET shares = ?, avg_price = ? WHERE user_id = ? AND ticker = ?",
-                     (total_shares, new_avg, user["user_id"], req.ticker))
-    else:
-        conn.execute("INSERT OR REPLACE INTO positions (user_id, ticker, shares, avg_price) VALUES (?, ?, ?, ?)",
-                     (user["user_id"], req.ticker, req.shares, price))
-
-    conn.commit()
-    new_cash = conn.execute("SELECT cash FROM users WHERE id = ?", (user["user_id"],)).fetchone()["cash"]
-    conn.close()
-    return {"message": f"Bought {req.shares} shares of {req.ticker} at ${price:.2f}", "cash": round(new_cash, 2)}
+        db.execute(
+            """INSERT INTO positions (user_id, ticker, shares, avg_price) VALUES (?, ?, ?, ?)
+               ON CONFLICT (user_id, ticker) DO UPDATE SET
+                 avg_price = (positions.avg_price * positions.shares + excluded.avg_price * excluded.shares)
+                             / (positions.shares + excluded.shares),
+                 shares = positions.shares + excluded.shares""",
+            (uid, ticker, req.shares, price),
+        )
+        db.execute(
+            "INSERT INTO trades (user_id, ticker, side, shares, price, total, realized_pnl, created_at) VALUES (?, ?, 'buy', ?, ?, ?, NULL, ?)",
+            (uid, ticker, req.shares, price, cost, utcnow_iso()),
+        )
+        db.commit()
+        new_cash = db.execute("SELECT cash FROM users WHERE id = ?", (uid,)).fetchone()["cash"]
+    return {"message": f"Bought {req.shares} shares of {ticker} at ${price:.2f}", "cash": round(new_cash, 2)}
 
 @app.post("/api/sell")
 def sell_stock(req: TradeRequest, user=Depends(verify_token)):
-    if req.shares <= 0:
-        raise HTTPException(400, "Shares must be positive")
-    price = engine.get_price(req.ticker)
-    if price <= 0:
-        raise HTTPException(400, "Invalid ticker")
+    ticker, price = _validate_trade(req)
+    uid = user["user_id"]
 
-    conn = get_db()
-    existing = conn.execute("SELECT shares, avg_price FROM positions WHERE user_id = ? AND ticker = ?",
-                            (user["user_id"], req.ticker)).fetchone()
-    if not existing or existing["shares"] < req.shares:
-        conn.close()
-        raise HTTPException(400, "Not enough shares to sell")
+    with get_db() as db:
+        existing = db.execute("SELECT shares, avg_price FROM positions WHERE user_id = ? AND ticker = ?",
+                              (uid, ticker)).fetchone()
+        cur = db.execute("UPDATE positions SET shares = shares - ? WHERE user_id = ? AND ticker = ? AND shares >= ?",
+                         (req.shares, uid, ticker, req.shares))
+        if not existing or cur.rowcount == 0:
+            raise HTTPException(400, "Not enough shares to sell")
 
-    proceeds = price * req.shares
-    new_shares = existing["shares"] - req.shares
+        proceeds = price * req.shares
+        realized = (price - existing["avg_price"]) * req.shares
+        db.execute("DELETE FROM positions WHERE user_id = ? AND ticker = ? AND shares <= 0", (uid, ticker))
+        db.execute("UPDATE users SET cash = cash + ? WHERE id = ?", (proceeds, uid))
+        db.execute(
+            "INSERT INTO trades (user_id, ticker, side, shares, price, total, realized_pnl, created_at) VALUES (?, ?, 'sell', ?, ?, ?, ?, ?)",
+            (uid, ticker, req.shares, price, proceeds, realized, utcnow_iso()),
+        )
+        db.commit()
+        new_cash = db.execute("SELECT cash FROM users WHERE id = ?", (uid,)).fetchone()["cash"]
+    return {"message": f"Sold {req.shares} shares of {ticker} at ${price:.2f}", "cash": round(new_cash, 2)}
 
-    conn.execute("UPDATE users SET cash = cash + ? WHERE id = ?", (proceeds, user["user_id"]))
-    if new_shares <= 0:
-        conn.execute("DELETE FROM positions WHERE user_id = ? AND ticker = ?", (user["user_id"], req.ticker))
-    else:
-        conn.execute("UPDATE positions SET shares = ? WHERE user_id = ? AND ticker = ?",
-                     (new_shares, user["user_id"], req.ticker))
+@app.get("/api/transactions")
+def get_transactions(limit: int = 100, user=Depends(verify_token)):
+    limit = max(1, min(limit, 500))
+    with get_db() as db:
+        rows = db.execute(
+            "SELECT id, ticker, side, shares, price, total, realized_pnl, created_at FROM trades WHERE user_id = ? ORDER BY id DESC LIMIT ?",
+            (user["user_id"], limit),
+        ).fetchall()
+    names = {s["ticker"]: s["name"] for s in STOCKS_DATA}
+    return [
+        {
+            "id": r["id"],
+            "type": r["side"],
+            "ticker": r["ticker"],
+            "name": names.get(r["ticker"], r["ticker"]),
+            "shares": r["shares"],
+            "price": round(r["price"], 2),
+            "total": round(r["total"], 2),
+            "realized_pnl": None if r["realized_pnl"] is None else round(r["realized_pnl"], 2),
+            "timestamp": r["created_at"],
+        }
+        for r in rows
+    ]
 
-    conn.commit()
-    new_cash = conn.execute("SELECT cash FROM users WHERE id = ?", (user["user_id"],)).fetchone()["cash"]
-    conn.close()
-    return {"message": f"Sold {req.shares} shares of {req.ticker} at ${price:.2f}", "cash": round(new_cash, 2)}
+# ──────────────────────────── LEADERBOARD ────────────────────────
+
+@app.get("/api/leaderboard")
+def get_leaderboard(user=Depends(verify_token)):
+    with get_db() as db:
+        users = db.execute("SELECT id, username, display_name, cash FROM users").fetchall()
+        positions = db.execute("SELECT user_id, ticker, shares FROM positions WHERE shares > 0").fetchall()
+        counts = db.execute("SELECT user_id, COUNT(*) AS n FROM trades GROUP BY user_id").fetchall()
+
+    holdings_value: dict[int, float] = {}
+    for p in positions:
+        holdings_value[p["user_id"]] = holdings_value.get(p["user_id"], 0) + p["shares"] * engine.get_price(p["ticker"])
+    trade_counts = {c["user_id"]: c["n"] for c in counts}
+
+    entries = []
+    for u in users:
+        net_worth = u["cash"] + holdings_value.get(u["id"], 0)
+        pnl = net_worth - INITIAL_CASH
+        entries.append({
+            "user_id": u["id"],
+            "username": u["display_name"] or u["username"],
+            "net_worth": round(net_worth, 2),
+            "pnl": round(pnl, 2),
+            "pnl_pct": round(pnl / INITIAL_CASH * 100, 2),
+            "total_trades": trade_counts.get(u["id"], 0),
+        })
+    entries.sort(key=lambda e: e["net_worth"], reverse=True)
+
+    me = None
+    for i, e in enumerate(entries, start=1):
+        e["rank"] = i
+        e["is_current_user"] = e["user_id"] == user["user_id"]
+        if e["is_current_user"]:
+            me = e
+    for e in entries:
+        del e["user_id"]
+    return {"total_traders": len(entries), "entries": entries[:50], "me": me}
 
 # ──────────────────────────── ACCOUNT MANAGEMENT ─────────────────
 
@@ -505,68 +647,48 @@ def sell_stock(req: TradeRequest, user=Depends(verify_token)):
 def change_password(req: ChangePasswordRequest, user=Depends(verify_token)):
     if len(req.new_password) < 4:
         raise HTTPException(400, "New password must be at least 4 characters")
-    conn = get_db()
-    row = conn.execute("SELECT password_hash FROM users WHERE id = ?", (user["user_id"],)).fetchone()
-    if not row or not pwd_ctx.verify(req.current_password, row["password_hash"]):
-        conn.close()
-        raise HTTPException(400, "Current password is incorrect")
-    new_hash = pwd_ctx.hash(req.new_password)
-    conn.execute("UPDATE users SET password_hash = ? WHERE id = ?", (new_hash, user["user_id"]))
-    conn.commit()
-    conn.close()
+    with get_db() as db:
+        row = db.execute("SELECT password_hash FROM users WHERE id = ?", (user["user_id"],)).fetchone()
+        if not row or not pwd_ctx.verify(req.current_password, row["password_hash"]):
+            raise HTTPException(400, "Current password is incorrect")
+        db.execute("UPDATE users SET password_hash = ? WHERE id = ?", (pwd_ctx.hash(req.new_password), user["user_id"]))
+        db.commit()
     return {"message": "Password changed successfully"}
 
 @app.post("/api/reset-portfolio")
 def reset_portfolio(user=Depends(verify_token)):
-    conn = get_db()
-    conn.execute("DELETE FROM positions WHERE user_id = ?", (user["user_id"],))
-    conn.execute("UPDATE users SET cash = ? WHERE id = ?", (INITIAL_CASH, user["user_id"]))
-    conn.commit()
-    conn.close()
+    with get_db() as db:
+        db.execute("DELETE FROM positions WHERE user_id = ?", (user["user_id"],))
+        db.execute("DELETE FROM trades WHERE user_id = ?", (user["user_id"],))
+        db.execute("UPDATE users SET cash = ? WHERE id = ?", (INITIAL_CASH, user["user_id"]))
+        db.commit()
     return {"message": "Portfolio reset successfully", "cash": INITIAL_CASH}
 
 @app.get("/api/stats")
 def get_stats(user=Depends(verify_token)):
-    conn = get_db()
-    positions = conn.execute(
-        "SELECT ticker, shares, avg_price FROM positions WHERE user_id = ?",
-        (user["user_id"],)
-    ).fetchall()
-    conn.close()
+    with get_db() as db:
+        trades = db.execute("SELECT side, realized_pnl, created_at FROM trades WHERE user_id = ?",
+                            (user["user_id"],)).fetchall()
 
-    total_trades = len(positions)
-    successful = 0
-    for p in positions:
-        current_price = engine.get_price(p["ticker"])
-        if current_price > p["avg_price"]:
-            successful += 1
-
-    win_rate = round((successful / total_trades * 100), 1) if total_trades > 0 else 0.0
+    sells = [t for t in trades if t["side"] == "sell"]
+    profitable = sum(1 for t in sells if (t["realized_pnl"] or 0) > 0)
+    trading_days = len({t["created_at"][:10] for t in trades})
+    win_rate = round(profitable / len(sells) * 100, 1) if sells else 0.0
     return {
-        "total_trades": total_trades,
-        "successful_trades": successful,
-        "trading_days": total_trades,  # approx: one day per holding
+        "total_trades": len(trades),
+        "successful_trades": profitable,
+        "trading_days": trading_days,
         "win_rate": win_rate,
     }
-
-class UpdateProfileRequest(BaseModel):
-    display_name: str
 
 @app.post("/api/update-profile")
 def update_profile(req: UpdateProfileRequest, user=Depends(verify_token)):
     name = req.display_name.strip()
     if len(name) < 1:
         raise HTTPException(400, "Display name cannot be empty")
-    conn = get_db()
-    # Ensure display_name column exists
-    try:
-        conn.execute("ALTER TABLE users ADD COLUMN display_name TEXT")
-        conn.commit()
-    except Exception:
-        pass  # column already exists
-    conn.execute("UPDATE users SET display_name = ? WHERE id = ?", (name, user["user_id"]))
-    conn.commit()
-    conn.close()
+    with get_db() as db:
+        db.execute("UPDATE users SET display_name = ? WHERE id = ?", (name, user["user_id"]))
+        db.commit()
     return {"message": "Profile updated", "display_name": name}
 
 # ──────────────────────────── STOCK INFO (WIKIPEDIA) ─────────────
@@ -580,13 +702,12 @@ async def get_stock_info(ticker: str, user=Depends(verify_token)):
     stock_data = next((s for s in STOCKS_DATA if s["ticker"] == ticker), None)
     if not stock_data:
         raise HTTPException(status_code=404, detail="Stock not found")
-        
+
     if ticker in wiki_cache:
         return wiki_cache[ticker]
-        
-    # Attempt to fetch from Wikipedia
+
     company_name = stock_data["name"]
-    # Provide a simple base response if fetching fails
+    # Simple base response if fetching fails
     base_info = {
         "ticker": ticker,
         "name": company_name,
@@ -604,21 +725,19 @@ async def get_stock_info(ticker: str, user=Depends(verify_token)):
                 timeout=5.0,
             )
             search_resp.raise_for_status()
-            search_data = search_resp.json()
-            
-            search_results = search_data.get("query", {}).get("search", [])
+            search_results = search_resp.json().get("query", {}).get("search", [])
             if not search_results:
                 wiki_cache[ticker] = base_info
                 return base_info
-                
+
             title = search_results[0]["title"]
-            
+
             # Step 2: Fetch the summary for that title
             summary_url = f"https://en.wikipedia.org/api/rest_v1/page/summary/{quote(title.replace(' ', '_'), safe='')}"
             summary_resp = await client.get(summary_url, timeout=5.0)
             summary_resp.raise_for_status()
             summary_data = summary_resp.json()
-            
+
             info = {
                 "ticker": ticker,
                 "name": company_name,
@@ -626,14 +745,11 @@ async def get_stock_info(ticker: str, user=Depends(verify_token)):
                 "summary": summary_data.get("extract", base_info["summary"]),
                 "url": summary_data.get("content_urls", {}).get("desktop", {}).get("page", None)
             }
-            
-            # Save to cache
             wiki_cache[ticker] = info
             return info
-            
+
         except Exception as e:
             print(f"Error fetching Wikipedia data for {company_name}: {e}")
-            wiki_cache[ticker] = base_info
             return base_info
 
 # ──────────────────────────── WEBSOCKET ──────────────────────────
@@ -648,10 +764,12 @@ async def websocket_endpoint(ws: WebSocket):
         while True:
             await ws.receive_text()
     except WebSocketDisconnect:
+        pass
+    finally:
         manager.disconnect(ws)
 
 # ──────────────────────────── ENTRY POINT ────────────────────────
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", "8000")), reload=True)
