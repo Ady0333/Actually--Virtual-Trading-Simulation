@@ -1,7 +1,7 @@
 
   # Website
 
-  This is a code bundle for Website. The original project is available at https://www.figma.com/design/HXzwL641pNLbB6kOu4yE8D/Website.
+  This is a code bundle for Website. The original project is available at https://super-cocada-af9c9c.netlify.app/.
 
   ## Running the code
 
