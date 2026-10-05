@@ -1,11 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { TrendingUp, TrendingDown, X, Plus, Minus } from 'lucide-react';
-import { useSearchParams } from 'react-router';
 import { useAuth } from '../context/AuthContext';
-import { useMarketFeed } from '../hooks/useMarketFeed';
 
 const USD_TO_INR = 83.5;
-import { API_BASE } from '../../config';
+import { API_BASE, WS_BASE } from '../../config';
 
 interface Stock {
   ticker: string;  // CHANGED from symbol
@@ -166,11 +164,11 @@ function TradeModal({ stock, onClose, onTrade, userHoldings }: TradeModalProps) 
 }
 
 export default function Markets() {
-  const { stocks, connected: wsConnected } = useMarketFeed();
-  const [searchParams, setSearchParams] = useSearchParams();
+  const [stocks, setStocks] = useState<Stock[]>([]);
   const [filteredStocks, setFilteredStocks] = useState<Stock[]>([]);
   const [filter, setFilter] = useState<'all' | 'gainers' | 'losers'>('all');
   const [selectedStock, setSelectedStock] = useState<Stock | null>(null);
+  const [wsConnected, setWsConnected] = useState(false);
   const [userHoldings, setUserHoldings] = useState<Record<string, number>>({});
   const { user, refreshUser } = useAuth();
 
@@ -196,14 +194,28 @@ export default function Markets() {
     }
   };
 
-  // Opened from the top-bar search: /markets?ticker=NVDA
-  const requestedTicker = searchParams.get('ticker');
   useEffect(() => {
-    if (!requestedTicker || stocks.length === 0) return;
-    const match = stocks.find(st => st.ticker === requestedTicker.toUpperCase());
-    if (match) setSelectedStock(match);
-    setSearchParams({}, { replace: true });
-  }, [requestedTicker, stocks.length > 0]);
+    const ws = new WebSocket(`${WS_BASE}/ws`);
+
+    ws.onopen = () => {
+      setWsConnected(true);
+    };
+
+    ws.onmessage = (event) => {
+      const data = JSON.parse(event.data);
+      if (data.stocks) setStocks(data.stocks);
+    };
+
+    ws.onclose = () => {
+      setWsConnected(false);
+    };
+
+    ws.onerror = () => {
+      setWsConnected(false);
+    };
+
+    return () => ws.close();
+  }, []);
 
   const applyFilter = (stockList: Stock[], filterType: 'all' | 'gainers' | 'losers') => {
     let filtered = [...stockList];
@@ -348,8 +360,7 @@ export default function Markets() {
       </main>
 
       <TradeModal
-        key={selectedStock?.ticker ?? 'none'}
-        stock={selectedStock && (stocks.find(st => st.ticker === selectedStock.ticker) ?? selectedStock)}
+        stock={selectedStock}
         onClose={() => setSelectedStock(null)}
         onTrade={handleTrade}
         userHoldings={userHoldings}

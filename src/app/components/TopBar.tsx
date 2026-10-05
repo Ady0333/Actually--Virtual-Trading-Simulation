@@ -1,17 +1,25 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Search, Wallet, LogOut } from 'lucide-react';
+import { Search, Wallet, TrendingUp, TrendingDown, LogOut, Menu, X } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { Link } from 'react-router';
-import { useMarketFeed, type MarketStock } from '../hooks/useMarketFeed';
-import { inr } from '../lib/format';
+
+const POPULAR_STOCKS = [
+  { symbol: 'NVDA', name: 'NVIDIA Corp', type: 'Equity', currency: 'USD' },
+  { symbol: 'AAPL', name: 'Apple Inc.', type: 'Equity', currency: 'USD' },
+  { symbol: 'GOOGL', name: 'Alphabet Inc.', type: 'Equity', currency: 'USD' },
+  { symbol: 'META', name: 'Meta Platforms', type: 'Equity', currency: 'USD' },
+  { symbol: 'TSLA', name: 'Tesla Inc.', type: 'Equity', currency: 'USD' },
+  { symbol: 'AMZN', name: 'Amazon.com Inc.', type: 'Equity', currency: 'USD' },
+  { symbol: 'JPM', name: 'JPMorgan Chase', type: 'Equity', currency: 'USD' },
+  { symbol: 'V', name: 'Visa Inc.', type: 'Equity', currency: 'USD' },
+];
 
 export default function TopBar() {
   const [searchQuery, setSearchQuery] = useState('');
-  const [searchResults, setSearchResults] = useState<MarketStock[]>([]);
+  const [searchResults, setSearchResults] = useState<typeof POPULAR_STOCKS>([]);
   const [showResults, setShowResults] = useState(false);
   const searchRef = useRef<HTMLDivElement>(null);
   const { user, logout } = useAuth();
-  const { stocks, connected } = useMarketFeed();
 
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
@@ -30,15 +38,13 @@ export default function TopBar() {
       return;
     }
 
-    const q = searchQuery.trim().toLowerCase();
-    const filtered = stocks.filter(stock =>
-      stock.ticker.toLowerCase().includes(q) ||
-      stock.name.toLowerCase().includes(q) ||
-      stock.sector.toLowerCase().includes(q)
+    const filtered = POPULAR_STOCKS.filter(stock =>
+      stock.symbol.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      stock.name.toLowerCase().includes(searchQuery.toLowerCase())
     );
-    setSearchResults(filtered.slice(0, 10));
+    setSearchResults(filtered);
     setShowResults(true);
-  }, [searchQuery, stocks]);
+  }, [searchQuery]);
 
   return (
     <div className="relative shrink-0 z-40 bg-background border-b border-border">
@@ -75,8 +81,8 @@ export default function TopBar() {
               </div>
               {searchResults.map((stock) => (
                 <Link
-                  key={stock.ticker}
-                  to={`/markets?ticker=${encodeURIComponent(stock.ticker)}`}
+                  key={stock.symbol}
+                  to="/markets"
                   onClick={() => {
                     setShowResults(false);
                     setSearchQuery('');
@@ -84,23 +90,21 @@ export default function TopBar() {
                   className="flex items-center gap-3 px-4 py-3 hover:bg-accent transition border-b border-border last:border-0 bg-card"
                 >
                   <div className="w-10 h-10 rounded-lg bg-primary/10 flex items-center justify-center flex-shrink-0">
-                    <span className="text-sm font-bold text-primary">{stock.ticker.substring(0, 2)}</span>
+                    <span className="text-sm font-bold text-primary">{stock.symbol.substring(0, 2)}</span>
                   </div>
                   <div className="flex-1 min-w-0">
-                    <p className="font-semibold text-foreground text-sm">{stock.ticker}</p>
+                    <p className="font-semibold text-foreground text-sm">{stock.symbol}</p>
                     <p className="text-xs text-muted-foreground truncate">{stock.name}</p>
                   </div>
                   <div className="text-right flex-shrink-0">
-                    <span className="text-xs font-medium text-foreground">{inr(stock.price)}</span>
-                    <p className={`text-xs ${stock.change_pct >= 0 ? 'text-green-500' : 'text-red-500'}`}>
-                      {stock.change_pct >= 0 ? '+' : ''}{stock.change_pct.toFixed(2)}%
-                    </p>
+                    <span className="text-xs text-muted-foreground">{stock.type}</span>
+                    <p className="text-xs text-muted-foreground">{stock.currency}</p>
                   </div>
                 </Link>
               ))}
               <div className="px-4 py-2 bg-accent border-t border-border">
                 <p className="text-xs text-muted-foreground">
-                  Click a result to trade it
+                  Click any result to go to Markets page
                 </p>
               </div>
             </div>
@@ -110,9 +114,9 @@ export default function TopBar() {
         {/* Right Side */}
         <div className="flex items-center gap-4">
           {/* Market Status */}
-          <div className={`hidden md:flex items-center gap-2 px-3 py-1.5 rounded-full ${connected ? 'bg-green-500/10' : 'bg-red-500/10'}`}>
-            <span className={`w-2 h-2 rounded-full ${connected ? 'bg-green-500 animate-pulse' : 'bg-red-500'}`}></span>
-            <span className={`text-xs font-medium ${connected ? 'text-green-500' : 'text-red-500'}`}>{connected ? 'Market Live' : 'Connecting…'}</span>
+          <div className="hidden md:flex items-center gap-2 px-3 py-1.5 bg-green-500/10 rounded-full">
+            <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></span>
+            <span className="text-xs font-medium text-green-500">NSE Open</span>
           </div>
 
           {/* Wallet */}
@@ -121,9 +125,15 @@ export default function TopBar() {
             <div className="hidden sm:block">
               <p className="text-xs text-muted-foreground leading-none mb-0.5">Wallet</p>
               <p className="text-sm font-semibold text-foreground leading-none">
-                {inr(user?.cash ?? 0)}
+                ₹{user ? (user.cash * 83.5).toLocaleString('en-IN', { maximumFractionDigits: 2 }) : '0.00'}
               </p>
             </div>
+          </div>
+
+          {/* P/L Badge (hidden on mobile) */}
+          <div className="hidden lg:flex items-center gap-1 px-3 py-1.5 bg-green-500/10 rounded-lg">
+            <TrendingUp className="w-4 h-4 text-green-500" />
+            <span className="text-sm font-semibold text-green-500">+₹0.00 (+0.00%)</span>
           </div>
 
           {/* User Avatar & Logout */}

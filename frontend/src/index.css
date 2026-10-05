@@ -1,0 +1,117 @@
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background-color: #ffffff;
+  color: #18181b; /* zinc-900 */
+}
+
+h1 {
+  font-size: 3.2em;
+  line-height: 1.1;
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 4px;
+}
+::-webkit-scrollbar-track {
+  background: #0d0d14;
+}
+::-webkit-scrollbar-thumb {
+  background: #222233;
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #00ff41;
+}
+
+/* Ticker tape container */
+.ticker-track {
+  display: flex;
+  animation: ticker-scroll 80s linear infinite;
+}
+.ticker-track:hover {
+  animation-play-state: paused;
+}
+
+/* Glow effects -> Soft elegant shadows for light theme */
+.glow-green {
+  text-shadow: 0 0 5px rgba(249, 115, 22, 0.2);
+}
+.glow-red {
+  text-shadow: 0 0 5px rgba(239, 68, 68, 0.2);
+}
+.border-glow-green {
+  box-shadow: 0 4px 20px rgba(249, 115, 22, 0.08);
+}
+.border-glow-red {
+  box-shadow: 0 4px 20px rgba(239, 68, 68, 0.08);
+}
+
+/* Card glass style */
+.card-glass {
+  background: rgba(250, 250, 250, 0.85);
+  border: 1px solid rgba(228, 228, 231, 0.7);
+  backdrop-filter: blur(12px);
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.03);
+}
+
+/* Bull vs Bear Battle Animations */
+@keyframes bull-charge {
+  0% { transform: translateX(-150px) scale(1); opacity: 0; }
+  20% { opacity: 1; }
+  45% { transform: translateX(30px) scale(1.1) rotate(10deg); }
+  50% { transform: translateX(50px) scale(1.2) rotate(20deg); }
+  60% { transform: translateX(10px) scale(1) rotate(0deg); }
+  100% { transform: translateX(-150px) scale(1); opacity: 0; }
+}
+
+@keyframes bear-charge {
+  0% { transform: translateX(150px) scale(1); opacity: 0; }
+  20% { opacity: 1; }
+  45% { transform: translateX(-30px) scale(1.1) rotate(-10deg); }
+  50% { transform: translateX(-50px) scale(1.2) rotate(-20deg); }
+  60% { transform: translateX(-10px) scale(1) rotate(0deg); }
+  100% { transform: translateX(150px) scale(1); opacity: 0; }
+}
+
+@keyframes clash-shockwave {
+  0%, 48% { transform: translate(-50%, -50%) scale(0.1); opacity: 0; }
+  50% { transform: translate(-50%, -50%) scale(1.5); opacity: 0.8; }
+  80% { transform: translate(-50%, -50%) scale(4); opacity: 0; }
+  100% { transform: translate(-50%, -50%) scale(4); opacity: 0; }
+}
+
+.animate-bull {
+  animation: bull-charge 4s cubic-bezier(0.25, 0.46, 0.45, 0.94) infinite;
+}
+
+.animate-bear {
+  animation: bear-charge 4s cubic-bezier(0.25, 0.46, 0.45, 0.94) infinite;
+}
+
+.animate-shockwave {
+  animation: clash-shockwave 4s ease-out infinite;
+}
+
+/* Elegant input styling */
+input[type="number"]::-webkit-inner-spin-button,
+input[type="number"]::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+input[type="number"] {
+  -moz-appearance: textfield;
+}
