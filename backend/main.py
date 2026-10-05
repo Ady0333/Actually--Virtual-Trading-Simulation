@@ -6,7 +6,6 @@ FastAPI + SQLite | Market Engine + News Bias + JWT Auth + WebSocket
 import os, json, time, random, hashlib, sqlite3, asyncio, threading
 from datetime import datetime, timedelta
 from contextlib import asynccontextmanager
-from urllib.parse import quote
 
 import httpx
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Depends, status
@@ -598,11 +597,8 @@ async def get_stock_info(ticker: str, user=Depends(verify_token)):
     async with httpx.AsyncClient(headers=headers) as client:
         try:
             # Step 1: Search for the company name to get the correct Wikipedia title
-            search_resp = await client.get(
-                "https://en.wikipedia.org/w/api.php",
-                params={"action": "query", "list": "search", "srsearch": company_name, "utf8": "", "format": "json"},
-                timeout=5.0,
-            )
+            search_url = f"https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch={company_name}&utf8=&format=json"
+            search_resp = await client.get(search_url, timeout=5.0)
             search_resp.raise_for_status()
             search_data = search_resp.json()
             
@@ -614,7 +610,7 @@ async def get_stock_info(ticker: str, user=Depends(verify_token)):
             title = search_results[0]["title"]
             
             # Step 2: Fetch the summary for that title
-            summary_url = f"https://en.wikipedia.org/api/rest_v1/page/summary/{quote(title.replace(' ', '_'), safe='')}"
+            summary_url = f"https://en.wikipedia.org/api/rest_v1/page/summary/{title}"
             summary_resp = await client.get(summary_url, timeout=5.0)
             summary_resp.raise_for_status()
             summary_data = summary_resp.json()

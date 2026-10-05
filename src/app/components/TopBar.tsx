@@ -47,7 +47,7 @@ export default function TopBar() {
   }, [searchQuery]);
 
   return (
-    <div className="relative shrink-0 z-40 bg-background border-b border-border">
+    <div className="fixed top-0 left-0 right-0 z-40 bg-background border-b border-border">
       <div className="container mx-auto px-6 h-16 flex items-center justify-between gap-4">
         {/* Logo */}
         <Link to="/" className="flex items-center gap-2">

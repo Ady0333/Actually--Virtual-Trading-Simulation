@@ -1,10 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import { TrendingUp, TrendingDown, DollarSign, Wallet, PieChart, Activity } from 'lucide-react';
 import { useNavigate } from 'react-router';
+import TopBar from '../components/TopBar';
 import { useAuth } from '../context/AuthContext';
 
 const USD_TO_INR = 83.5;
 import { API_BASE, WS_BASE } from '../../config';
+const ws = new WebSocket(`${WS_BASE}/ws`);
 
 interface NewsItem {
   headline: string;
@@ -47,9 +49,8 @@ export default function Dashboard() {
         const response = await fetch(`${API_BASE}/api/portfolio`, {
           headers: { Authorization: `Bearer ${token}` }
         });
-        if (!response.ok) return;
         const data = await response.json();
-
+        
         const cashINR = data.cash * USD_TO_INR;
         const portfolioValueINR = (data.total_value - data.cash) * USD_TO_INR;
         const netWorthINR = data.total_value * USD_TO_INR;
@@ -77,7 +78,9 @@ export default function Dashboard() {
 
   return (
     <div className="min-h-screen bg-background">
-      <main>
+      <TopBar />
+      
+      <main className="pt-16">
         <div className="container mx-auto px-6 py-8">
           {/* Stats Grid */}
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">

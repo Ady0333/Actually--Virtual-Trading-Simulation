@@ -6,14 +6,14 @@ import { TrendingUp, Eye, EyeOff, Loader2 } from 'lucide-react';
 export default function Login() {
   const { login, register, user } = useAuth();
   const navigate = useNavigate();
+  if (user) return <Navigate to="/" replace />;
+
   const [mode, setMode] = useState<'login' | 'register'>('login');
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [showPass, setShowPass] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-
-  if (user) return <Navigate to="/" replace />;
 
   const handleSubmit = async () => {
     setError('');
@@ -202,4 +202,4 @@ export default function Login() {
       </div>
     </div>
   );
-}
+}
