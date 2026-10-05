@@ -20,11 +20,10 @@ interface TradeModalProps {
   onClose: () => void;
   onTrade: (ticker: string, quantity: number, action: 'buy' | 'sell') => void;
   userHoldings: Record<string, number>;
-  initialAction?: 'buy' | 'sell';
 }
 
-function TradeModal({ stock, onClose, onTrade, userHoldings, initialAction = 'buy' }: TradeModalProps) {
-  const [action, setAction] = useState<'buy' | 'sell'>(initialAction);
+function TradeModal({ stock, onClose, onTrade, userHoldings }: TradeModalProps) {
+  const [action, setAction] = useState<'buy' | 'sell'>('buy');
   const [quantity, setQuantity] = useState(1);
   const { user } = useAuth();
 
@@ -119,11 +118,6 @@ function TradeModal({ stock, onClose, onTrade, userHoldings, initialAction = 'bu
           {action === 'sell' && (
             <p className="text-xs text-muted-foreground mt-2">
               You own {availableShares} shares
-              {availableShares > 0 && (
-                <button onClick={() => setQuantity(availableShares)} className="ml-2 text-primary font-medium hover:underline">
-                  Sell all
-                </button>
-              )}
             </p>
           )}
         </div>
@@ -177,11 +171,6 @@ export default function Markets() {
   const [filteredStocks, setFilteredStocks] = useState<Stock[]>([]);
   const [filter, setFilter] = useState<'all' | 'gainers' | 'losers'>('all');
   const [selectedStock, setSelectedStock] = useState<Stock | null>(null);
-  const [tradeAction, setTradeAction] = useState<'buy' | 'sell'>('buy');
-  const openTrade = (stock: Stock, action: 'buy' | 'sell') => {
-    setTradeAction(action);
-    setSelectedStock(stock);
-  };
   const [userHoldings, setUserHoldings] = useState<Record<string, number>>({});
   const { user, refreshUser } = useAuth();
 
@@ -208,13 +197,11 @@ export default function Markets() {
   };
 
   // Opened from the top-bar search: /markets?ticker=NVDA
-  // ...or from Portfolio: /markets?ticker=NVDA&action=sell
   const requestedTicker = searchParams.get('ticker');
-  const requestedAction = searchParams.get('action') === 'sell' ? 'sell' : 'buy';
   useEffect(() => {
     if (!requestedTicker || stocks.length === 0) return;
     const match = stocks.find(st => st.ticker === requestedTicker.toUpperCase());
-    if (match) openTrade(match, requestedAction);
+    if (match) setSelectedStock(match);
     setSearchParams({}, { replace: true });
   }, [requestedTicker, stocks.length > 0]);
 
@@ -346,23 +333,12 @@ export default function Markets() {
                     </div>
                   </td>
                   <td className="px-6 py-4 text-right">
-                    <div className="inline-flex gap-2">
-                      <button
-                        onClick={() => openTrade(stock, 'buy')}
-                        className="px-4 py-2 bg-green-600 text-white text-sm font-medium rounded-lg hover:bg-green-700 transition"
-                      >
-                        Buy
-                      </button>
-                      {(userHoldings[stock.ticker] || 0) > 0 && (
-                        <button
-                          onClick={() => openTrade(stock, 'sell')}
-                          className="px-4 py-2 bg-red-500 text-white text-sm font-medium rounded-lg hover:bg-red-600 transition"
-                          title={`You own ${userHoldings[stock.ticker]} shares`}
-                        >
-                          Sell
-                        </button>
-                      )}
-                    </div>
+                    <button
+                      onClick={() => setSelectedStock(stock)}
+                      className="px-4 py-2 bg-green-600 text-white text-sm font-medium rounded-lg hover:bg-green-700 transition"
+                    >
+                      Trade
+                    </button>
                   </td>
                 </tr>
               ))}
@@ -372,8 +348,7 @@ export default function Markets() {
       </main>
 
       <TradeModal
-        key={`${selectedStock?.ticker ?? 'none'}-${tradeAction}`}
-        initialAction={tradeAction}
+        key={selectedStock?.ticker ?? 'none'}
         stock={selectedStock && (stocks.find(st => st.ticker === selectedStock.ticker) ?? selectedStock)}
         onClose={() => setSelectedStock(null)}
         onTrade={handleTrade}

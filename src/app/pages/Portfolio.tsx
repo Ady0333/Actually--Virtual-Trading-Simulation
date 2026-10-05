@@ -1,7 +1,6 @@
 import { useState, useEffect } from 'react';
 import { TrendingUp, TrendingDown, Loader2, RefreshCw } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
-import { useNavigate } from 'react-router';
 
 import { API_BASE } from '../../config';
 
@@ -24,7 +23,6 @@ interface PortfolioData {
 
 export default function Portfolio() {
   const { user } = useAuth();
-  const navigate = useNavigate();
   const [data, setData] = useState<PortfolioData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -131,7 +129,7 @@ export default function Portfolio() {
           { label: 'Cash Balance', value: `₹${cashInr.toLocaleString('en-IN', { maximumFractionDigits: 2 })}`, color: 'var(--accent)' },
           {
             label: 'Total P/L',
-            value: `${totalPnl >= 0 ? '+' : '-'}₹${Math.abs(totalPnl).toLocaleString('en-IN', { maximumFractionDigits: 2 })}`,
+            value: `${totalPnl >= 0 ? '+' : ''}₹${Math.abs(totalPnl).toLocaleString('en-IN', { maximumFractionDigits: 2 })}`,
             color: totalPnl >= 0 ? 'var(--accent)' : 'var(--red)',
             sub: `${totalPnl >= 0 ? '+' : ''}${totalPnlPct.toFixed(2)}%`,
           },
@@ -176,7 +174,7 @@ export default function Portfolio() {
             <table className="w-full">
               <thead>
                 <tr className="border-b" style={{ borderColor: 'var(--border-dim)' }}>
-                  {['Symbol', 'Shares', 'Avg Price', 'Current Price', 'Market Value', 'P/L', 'Actions'].map((col, i) => (
+                  {['Symbol', 'Shares', 'Avg Price', 'Current Price', 'Market Value', 'P/L'].map((col, i) => (
                     <th key={col}
                       className="px-4 py-2 text-[10px] font-semibold uppercase tracking-wider"
                       style={{ fontFamily: 'var(--font-ui)', color: 'var(--text-muted)', textAlign: i === 0 ? 'left' : 'right' }}>
@@ -228,31 +226,13 @@ export default function Portfolio() {
                           <div>
                             <span className="text-[13px] font-medium tabular-nums"
                               style={{ fontFamily: 'var(--font-mono)', color: isProfit ? 'var(--accent)' : 'var(--red)' }}>
-                              {isProfit ? '+' : '-'}₹{Math.abs(h.pnl_inr).toLocaleString('en-IN', { maximumFractionDigits: 2 })}
+                              {isProfit ? '+' : ''}₹{Math.abs(h.pnl_inr).toLocaleString('en-IN', { maximumFractionDigits: 2 })}
                             </span>
                             <span className="text-xs ml-1 tabular-nums"
                               style={{ fontFamily: 'var(--font-mono)', color: isProfit ? 'var(--accent)' : 'var(--red)' }}>
                               ({isProfit ? '+' : ''}{h.pnl_pct.toFixed(2)}%)
                             </span>
                           </div>
-                        </div>
-                      </td>
-                      <td className="px-4 py-3 text-right">
-                        <div className="inline-flex gap-2">
-                          <button
-                            onClick={() => navigate(`/markets?ticker=${encodeURIComponent(h.ticker)}&action=sell`)}
-                            className="px-3 h-7 rounded text-xs font-semibold"
-                            style={{ fontFamily: 'var(--font-ui)', backgroundColor: 'var(--red-dim)', color: 'var(--red)', border: '1px solid var(--red)' }}
-                          >
-                            Sell
-                          </button>
-                          <button
-                            onClick={() => navigate(`/markets?ticker=${encodeURIComponent(h.ticker)}&action=buy`)}
-                            className="px-3 h-7 rounded text-xs font-semibold"
-                            style={{ fontFamily: 'var(--font-ui)', backgroundColor: 'var(--accent-dim)', color: 'var(--accent)', border: '1px solid var(--accent)' }}
-                          >
-                            Buy
-                          </button>
                         </div>
                       </td>
                     </tr>
